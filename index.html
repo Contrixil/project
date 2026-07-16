@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>휠체어에서 살아남기 - 1인칭 3D 시뮬레이션</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, sans-serif;
+      user-select: none;
+    }
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      color: #fff;
+      background: rgba(0,0,0,0.35);
+      padding: 12px 14px;
+      border-radius: 12px;
+      line-height: 1.5;
+      font-size: 15px;
+      max-width: 360px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+    }
+    #hud b { color: #7ee7ff; }
+    #message {
+      margin-top: 8px;
+      color: #ffd166;
+      font-weight: bold;
+      min-height: 22px;
+    }
+    #centerHint {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255,255,255,0.9);
+      text-align: center;
+      z-index: 6;
+      pointer-events: none;
+      font-size: 18px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+    }
+    #crosshair {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: 14px;
+      height: 14px;
+      transform: translate(-50%, -50%);
+      z-index: 7;
+      pointer-events: none;
+    }
+    #crosshair:before, #crosshair:after {
+      content: "";
+      position: absolute;
+      background: rgba(255,255,255,0.75);
+      border-radius: 2px;
+    }
+    #crosshair:before {
+      left: 6px;
+      top: 0;
+      width: 2px;
+      height: 14px;
+    }
+    #crosshair:after {
+      left: 0;
+      top: 6px;
+      width: 14px;
+      height: 2px;
+    }
+    #goal {
+      position: fixed;
+      right: 12px;
+      top: 12px;
+      z-index: 10;
+      color: #fff;
+      background: rgba(0,0,0,0.35);
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 15px;
+      line-height: 1.5;
+      min-width: 220px;
+      text-align: left;
+    }
+    #goal b { color: #9cff57; }
+    #wheelEffect {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 8;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      background:
+        radial-gradient(circle at 50% 70%, rgba(126,231,255,0.18), rgba(126,231,255,0.05) 28%, rgba(0,0,0,0) 60%);
+      mix-blend-mode: screen;
+    }
+    #wheelEffect.active {
+      opacity: 1;
+    }
+    #win, #gameover {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      color: #fff;
+      background: rgba(0,0,0,0.72);
+      z-index: 30;
+      text-align: center;
+    }
+    #win h1, #gameover h1 {
+      margin: 0;
+      font-size: 48px;
+    }
+    #win p, #gameover p {
+      font-size: 18px;
+      opacity: 0.9;
+    }
+    #win button, #gameover button {
+      margin-top: 18px;
+      font-size: 18px;
+      padding: 12px 18px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div>이동: <b>WASD</b> / 시점: <b>마우스</b></div>
+    <div>특수 바퀴: <b>F</b></div>
+    <div>슈트 모드: <b>E</b></div>
+    <div>목표: 버스에 탑승하기</div>
+    <div id="message">버스 정류장으로 이동하세요.</div>
+  </div>
+  <div id="goal">
+    <div>시뮬레이션 목표</div>
+    <div><b>버스 탑승</b>까지 이동</div>
+    <div><b>narrowPath</b>는 특수 슈트 필요</div>
+    <div><b>steepPath</b>는 특수 바퀴 필요</div>
+  </div>
+  <div id="centerHint">마우스를 움직여 1인칭 시점을 조작하세요</div>
+  <div id="crosshair"></div>
+  <div id="wheelEffect"></div>
+  <div id="win">
+    <h1>탑승 성공</h1>
+    <p>버스에 안전하게 탑승했습니다.</p>
+    <button onclick="location.reload()">다시 시작</button>
+  </div>
+  <div id="gameover">
+    <h1>실패</h1>
+    <p>충돌로 인해 이동이 어려워졌습니다.</p>
+    <button onclick="location.reload()">다시 시작</button>
+  </div>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const message = document.getElementById('message');
+    const winEl = document.getElementById('win');
+    const wheelEffect = document.getElementById('wheelEffect');
+
+    function resize() {
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+    }
+    addEventListener('resize', resize);
+    resize();
+
+    const keys = {};
+    const mouse = { x: innerWidth / 2, y: innerHeight / 2 };
+
+    addEventListener('keydown', e => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key.toLowerCase() === 'f') toggleWheels();
+      if (e.key.toLowerCase() === 'e') toggleSuit();
+    });
+    addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+    addEventListener('mousemove', e => {
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+    });
+
+    const world = { width: 2400, height: 1600, depth: 1200 };
+
+    const player = {
+      x: 180,
+      y: 920,
+      z: 120,
+      eyeHeight: 85,
+      speed: 4.0,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      inBus: false
+    };
+
+    let isSpecialSuitActivated = false;
+    let isSpecialWheelActivated = false;
+
+    const bus = {
+      x: 1700,
+      y: 820,
+      z: 40,
+      w: 360,
+      h: 160,
+      d: 120,
+      doorX: 1700,
+      doorY: 820,
+      doorZ: 50
+    };
+
+    const zones = {
+      narrowPath: { x: 980, y: 700, w: 220, h: 220 },
+      steepPath: { x: 1520, y: 820, w: 240, h: 180 }
+    };
+
+    function toggleWheels() {
+      if (player.inBus) return;
+      isSpecialWheelActivated = !isSpecialWheelActivated;
+      if (isSpecialWheelActivated) isSpecialSuitActivated = false;
+      message.textContent = isSpecialWheelActivated ? '특수 바퀴 전개: steepPath를 통과할 수 있습니다.' : '특수 바퀴 해제';
+    }
+
+    function toggleSuit() {
+      if (player.inBus) return;
+      isSpecialSuitActivated = !isSpecialSuitActivated;
+      if (isSpecialSuitActivated) isSpecialWheelActivated = false;
+      message.textContent = isSpecialSuitActivated ? '특수 슈트 활성화: narrowPath를 통과할 수 있습니다.' : '특수 슈트 해제';
+    }
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function projectPoint(x, y, z, cam) {
+      const dx = x - cam.x;
+      const dy = y - cam.y;
+      const dz = z - cam.z;
+
+      const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+      let rx = dx * cy - dz * sy;
+      let rz = dx * sy + dz * cy;
+
+      const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+      let ry = dy * cp - rz * sp;
+      rz = dy * sp + rz * cp;
+
+      const cr = Math.cos(cam.roll), sr = Math.sin(cam.roll);
+      const fx = rx * cr - ry * sr;
+      const fy = rx * sr + ry * cr;
+
+      const fov = 700;
+      const scale = fov / (fov + rz + 1);
+      return {
+        x: canvas.width / 2 + fx * scale,
+        y: canvas.height / 2 + fy * scale,
+        s: scale,
+        z: rz
+      };
+    }
+
+    function drawPoly(points, fillStyle, strokeStyle) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+      ctx.closePath();
+      if (fillStyle) {
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+      }
+      if (strokeStyle) {
+        ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    function box3D(obj, cam, colors) {
+      const { x, y, z, w, h, d } = obj;
+      const p = [
+        projectPoint(x, y, z, cam),
+        projectPoint(x + w, y, z, cam),
+        projectPoint(x + w, y + h, z, cam),
+        projectPoint(x, y + h, z, cam),
+        projectPoint(x, y, z + d, cam),
+        projectPoint(x + w, y, z + d, cam),
+        projectPoint(x + w, y + h, z + d, cam),
+        projectPoint(x, y + h, z + d, cam)
+      ];
+      drawPoly([p[0], p[1], p[2], p[3]], colors.top, colors.edge);
+      drawPoly([p[4], p[5], p[6], p[7]], colors.front, colors.edge);
+      drawPoly([p[0], p[1], p[5], p[4]], colors.side, colors.edge);
+      drawPoly([p[1], p[2], p[6], p[5]], colors.side2, colors.edge);
+      drawPoly([p[2], p[3], p[7], p[6]], colors.side3, colors.edge);
+      drawPoly([p[3], p[0], p[4], p[7]], colors.side4, colors.edge);
+    }
+
+    function pointInRect(px, py, r) {
+      return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+    }
+
+    function movePlayer() {
+      const yaw = player.yaw;
+      const forwardX = Math.sin(yaw);
+      const forwardZ = Math.cos(yaw);
+      const rightX = Math.cos(yaw);
+      const rightZ = -Math.sin(yaw);
+
+      let moveX = 0;
+      let moveZ = 0;
+
+      if (keys['w']) { moveX += forwardX; moveZ += forwardZ; }
+      if (keys['s']) { moveX -= forwardX; moveZ -= forwardZ; }
+      if (keys['d']) { moveX += rightX; moveZ += rightZ; }
+      if (keys['a']) { moveX -= rightX; moveZ -= rightZ; }
+
+      const len = Math.hypot(moveX, moveZ) || 1;
+      moveX /= len;
+      moveZ /= len;
+
+      const speed = 4.0;
+      const nextX = player.x + moveX * speed;
+      const nextZ = player.z + moveZ * speed;
+
+      const enteringNarrowPath = pointInRect(nextX, nextZ, zones.narrowPath);
+      const enteringSteepPath = pointInRect(nextX, nextZ, zones.steepPath);
+
+      if (enteringNarrowPath && !isSpecialSuitActivated) {
+        message.textContent = 'narrowPath는 특수 슈트가 활성화되어야 통과할 수 있습니다.';
+        return;
+      }
+
+      if (enteringSteepPath && !isSpecialWheelActivated) {
+        message.textContent = 'steepPath는 특수 바퀴가 활성화되어야 통과할 수 있습니다.';
+        return;
+      }
+
+      player.x = clamp(nextX, 20, world.width - 20);
+      player.z = clamp(nextZ, 0, world.depth);
+    }
+
+    function update() {
+      if (player.inBus) return;
+
+      movePlayer();
+
+      const mx = (mouse.x - innerWidth / 2) / (innerWidth / 2);
+      const my = (mouse.y - innerHeight / 2) / (innerHeight / 2);
+      player.yaw = mx * Math.PI * 1.1;
+      player.pitch = clamp(-my * Math.PI * 0.45, -0.85, 0.85);
+      player.roll = mx * 0.12;
+
+      wheelEffect.classList.toggle('active', isSpecialWheelActivated);
+
+      const distToDoor = Math.hypot(player.x - bus.doorX, player.z - bus.doorZ);
+
+      if (distToDoor < 54 && isSpecialWheelActivated) {
+        player.inBus = true;
+        winEl.style.display = 'flex';
+      }
+
+      if (pointInRect(player.x, player.z, zones.narrowPath) && !isSpecialSuitActivated) {
+        message.textContent = 'narrowPath 구간입니다. E로 특수 슈트를 활성화해야 합니다.';
+      } else if (pointInRect(player.x, player.z, zones.steepPath) && !isSpecialWheelActivated) {
+        message.textContent = 'steepPath 구간입니다. F로 특수 바퀴를 활성화해야 합니다.';
+      } else if (distToDoor < 180) {
+        message.textContent = '버스 문이 가까워졌습니다. 특수 바퀴를 활성화한 상태로 접근하세요.';
+      } else {
+        message.textContent = '버스 정류장으로 이동하세요.';
+      }
+    }
+
+    function drawGround(cam) {
+      box3D({ x: -1200, y: 980, z: -1200, w: 4800, h: 40, d: 2400 }, cam, {
+        top: '#7f7f7f',
+        front: '#737373',
+        side: '#666',
+        side2: '#666',
+        side3: '#666',
+        side4: '#666',
+        edge: 'rgba(0,0,0,0.06)'
+      });
+    }
+
+    function drawZone(cam, zone, topColor) {
+      box3D({ x: zone.x, y: 930, z: zone.y, w: zone.w, h: 10, d: zone.h }, cam, {
+        top: topColor,
+        front: topColor,
+        side: topColor,
+        side2: topColor,
+        side3: topColor,
+        side4: topColor,
+        edge: 'rgba(255,255,255,0.18)'
+      });
+    }
+
+    function drawWheelGlow() {
+      if (!isSpecialWheelActivated) return;
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const g = ctx.createRadialGradient(cx, cy + 180, 40, cx, cy + 180, 260);
+      g.addColorStop(0, 'rgba(126,231,255,0.18)');
+      g.addColorStop(0.4, 'rgba(126,231,255,0.08)');
+      g.addColorStop(1, 'rgba(126,231,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function drawViewArms() {
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const bob = Math.sin(performance.now() * 0.006) * 6;
+
+      ctx.fillStyle = isSpecialSuitActivated ? 'rgba(126,231,255,0.18)' : 'rgba(30,64,175,0.12)';
+      ctx.beginPath();
+      ctx.moveTo(cx - 120, cy + 160 + bob);
+      ctx.lineTo(cx - 55, cy + 90 + bob);
+      ctx.lineTo(cx - 20, cy + 115 + bob);
+      ctx.lineTo(cx - 70, cy + 190 + bob);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(cx + 120, cy + 160 + bob);
+      ctx.lineTo(cx + 55, cy + 90 + bob);
+      ctx.lineTo(cx + 20, cy + 115 + bob);
+      ctx.lineTo(cx + 70, cy + 190 + bob);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawWorld() {
+      const cam = {
+        x: player.x,
+        y: player.y - player.eyeHeight,
+        z: player.z + 20,
+        yaw: player.yaw,
+        pitch: player.pitch,
+        roll: player.roll
+      };
+
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      skyGrad.addColorStop(0, '#8ec5ff');
+      skyGrad.addColorStop(0.6, '#dfefff');
+      skyGrad.addColorStop(1, '#b7c6d1');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      drawGround(cam);
+      drawZone(cam, zones.narrowPath, 'rgba(126,231,255,0.12)');
+      drawZone(cam, zones.steepPath, 'rgba(255,209,102,0.12)');
+
+      box3D({ x: 0, y: 930, z: 0, w: world.width, h: 40, d: 120 }, cam, {
+        top: '#7f7f7f',
+        front: '#747474',
+        side: '#666',
+        side2: '#666',
+        side3: '#666',
+        side4: '#666',
+        edge: 'rgba(0,0,0,0.06)'
+      });
+
+      box3D(bus, cam, {
+        top: '#4b4b4b',
+        front: '#3b3b3b',
+        side: '#303030',
+        side2: '#303030',
+        side3: '#303030',
+        side4: '#303030',
+        edge: '#1b1b1b'
+      });
+
+      box3D({ x: bus.doorX, y: bus.doorY - 8, z: bus.z + 10, w: 70, h: 95, d: 10 }, cam, {
+        top: '#e5e7eb',
+        front: '#d1d5db',
+        side: '#bfc7d2',
+        side2: '#bfc7d2',
+        side3: '#bfc7d2',
+        side4: '#bfc7d2',
+        edge: '#9ca3af'
+      });
+
+      drawWheelGlow();
+      drawViewArms();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.02)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function render() {
+      drawWorld();
+    }
+
+    function loop() {
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    message.textContent = '정류장까지 이동한 뒤, F와 E로 구간 조건을 맞추세요.';
+    loop();
+  </script>
+</body>
+</html>
